@@ -37,8 +37,9 @@ IHoloadedModule loadModule (string libPath) {
 void main (string[] args) {
     writefln("Hello world!");
 
-    auto sheep = loadModule("libfoo.dylib");
+    auto sheep = loadModule("libfoo.so");
     if (sheep.init) { sheep.init(); }
     if (sheep.teardown) { sheep.teardown(); }
+    if (sheep.handle) { dlclose(sheep.handle); sheep.handle = null; }
 
 }
