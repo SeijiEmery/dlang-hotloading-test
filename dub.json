@@ -1,0 +1,10 @@
+{
+    "name": "hotloading-test",
+    "description": "Testcase for hotloading code at runtime using C/C++/D.",
+    "authors": ["Seiji Emery"],
+    "license": "MIT",
+    "dependencies": {},
+    "excludedSourceFiles": [
+        "src/modules/*"
+    ]
+}
