@@ -37,6 +37,9 @@ IHoloadedModule loadModule (string libPath) {
 void main (string[] args) {
     writefln("Hello world!");
 
+    import std.path;
+    auto scanner = new FSScanner(args[0].dirName);
+
     auto sheep = loadModule("libfoo.so");
     if (sheep.init) { sheep.init(); }
     if (sheep.teardown) { sheep.teardown(); }

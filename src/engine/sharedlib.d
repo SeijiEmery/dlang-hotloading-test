@@ -56,9 +56,6 @@ public:
             return cast(T)dlsym(_handle, symbolName.toStringz());
         else
             return cast(T)GetProcAddress(cast(HMODULE)_handle, symbolName.toStringz());
-
-        // should never reach this
-        return null;
     }
     
     @property public SharedLibHandle handle() { return _handle; }

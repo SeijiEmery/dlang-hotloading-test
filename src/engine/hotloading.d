@@ -6,6 +6,8 @@ import std.format;
 import std.stdio;
 import std.string;
 
+private __gshared string g_buildDir = "./cache/build/";
+private __gshared string g_libDir   = "./cache/libs/";
 
 class ISharedLib {
     SLRunState state = SLRunState.INACTIVE;
@@ -47,6 +49,10 @@ final class DSharedLib : ISharedLib {
     }
 
     this (string path) {}
+
+    private auto resolvePath (string basePath, string relPath) {
+        return relPath;
+    }
 
     private void load () {
         if (state < SLRunState.COMPILING) {
