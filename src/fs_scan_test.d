@@ -6,16 +6,27 @@ import std.datetime;
 import std.algorithm: swap;
 import std.conv;
 import std.array: join, array;
+import core.thread;
 
 string[] WATCHED_DIRS = [
     "./src/modules", "./assets"
 ];
 
-class Watcher {
-    SysTime[string] timestamps;
-    string[] watchedDirs;
-    string[] uniqueFiles;
-    string[] lastUniqueFiles;
+struct FileChangeEvent {
+    string[] added, modified, removed;
+}
+alias FileChangeListener = void delegate(FileChangeEvent);
+
+
+// Basic utility that watches a list of directories + produces a list of file change
+// events via polling. Not thread safe (see FileWatcherRunner, FileWatcherEventCollector).
+class FileWatcher {
+    private SysTime[string] timestamps;
+    private string[] watchedDirs;
+    private string[] uniqueFiles;
+    private string[] lastUniqueFiles;
+
+    public FileChangeListener[] listeners;
 
     this (string rel, string[] dirs) {
         foreach (dir; dirs)
@@ -24,7 +35,10 @@ class Watcher {
                 .absolutePath
                 .asNormalizedPath
                 .to!string;
-        rescan();
+    }
+    public auto addListener (FileChangeListener listener) {
+        listeners ~= listener;
+        return this;
     }
 
     private string[] newFiles, touchedFiles, deletedFiles;
@@ -60,23 +74,104 @@ class Watcher {
         //assert(equal(newFiles, setDifference(uniqueFiles, lastUniqueFiles)), format(" => \n\t%s\n != %s",
         //    newFiles.join("\n\t"), setDifference(uniqueFiles, lastUniqueFiles).array.join("\n\t")));
 
-        if (newFiles.length)
-            writefln("%d files added:\n\t%s", newFiles.length, newFiles.join("\n\t"));
-        if (touchedFiles.length)
-            writefln("%d files changed:\n\t%s", touchedFiles.length, touchedFiles.join("\n\t"));
-        if (deletedFiles.length)
-            writefln("%d files deleted:\n\t%s", deletedFiles.length, deletedFiles.join("\n\t"));
+        if (newFiles.length || touchedFiles.length || deletedFiles.length) {
+            auto evt = FileChangeEvent(newFiles, touchedFiles, deletedFiles);
+            foreach (cb; listeners)
+                cb(evt);
+        }
     }
 }
 
+// Runs a FileWatcher on an async thread, with controls to kill, etc the running thread.
+class FileWatcherRunner : Thread {
+    public Duration pollingInterval = dur!("msecs")(100);
 
-void main (string[] args) {
-    auto watcher = new Watcher(args[0].baseName.stripExtension, WATCHED_DIRS);
-    while (1) {
-        import core.thread;
-        Thread.sleep(dur!("msecs")(100));
-        watcher.rescan();
+    private bool shouldDie = false;
+
+    public Exception exc = null;  // set if terminated unexpectedly
+    public FileWatcher watcher;
+
+    this (FileWatcher watcher) {
+        this.watcher = watcher;
+        super(&run);
+    }
+    ~this () { kill(); }
+
+    void kill () { shouldDie = true; }
+
+    private void run () {
+        while (!shouldDie) {
+            watcher.rescan();
+            sleep(pollingInterval);
+        }
+    }
+}
+
+// Collects events from a FileWatcher running concurrently and enables them to be collected +
+// resent from a given thread (ie. the main thread).
+class FileWatcherEventCollector {
+    private FileChangeEvent[] pendingEvts, processedEvts;
+    public FileChangeListener[] listeners;
+
+    import core.sync.mutex;
+    private Mutex mutex;
+    this () { mutex = new Mutex(); }
+
+    auto addListener (FileChangeListener listener) {
+        return listeners ~= listener, this;
     }
 
+    // Use this as a FileWatcher listener (should only be called by FileWatcher)
+    void onEvent (FileChangeEvent evt) {
+        synchronized (mutex) {
+            pendingEvts ~= evt;
+        }
+    }
+
+    // Dispatches pending events to listeners on the thread it's called from.
+    // This should get called on the main thread once every frame or something.
+    void dispatchEvents () {
+        synchronized (mutex) {
+            if (pendingEvts.length) {
+                swap(pendingEvts, processedEvts);
+            }
+        }
+
+        if (processedEvts.length) {
+            foreach (evt; processedEvts[1..$]) {
+                processedEvts[0].added   ~= evt.added;
+                processedEvts[0].removed ~= evt.removed;
+                processedEvts[0].modified ~= evt.modified;
+            }
+
+            foreach (cb; listeners)
+                cb(processedEvts[0]);
+            processedEvts.length = 0;
+        }
+    }
+}  
+
+
+void main (string[] args) {
+    auto collector = new FileWatcherEventCollector();
+    auto watcher   = new FileWatcher(args[0].baseName.stripExtension, WATCHED_DIRS)
+        .addListener(&collector.onEvent)
+        .addListener((FileChangeEvent evt) { writefln("Event!"); }); // called on fs thread
+
+    collector.addListener((FileChangeEvent ev) {   // called on main thread
+        if (ev.added.length)
+            writefln("%d files added:\n\t%s", ev.added.length, ev.added.join("\n\t"));
+        if (ev.modified.length)
+            writefln("%d files changed:\n\t%s", ev.modified.length, ev.modified.join("\n\t"));
+        if (ev.removed.length)
+            writefln("%d files deleted:\n\t%s", ev.removed.length, ev.removed.join("\n\t"));
+    });
+
+    auto fsthread = new FileWatcherRunner(watcher).start();
+    while (fsthread.isRunning) {
+        collector.dispatchEvents();
+        //Thread.sleep(dur!("msecs")(1000));
+        Thread.sleep(dur!("msecs")(16));
+    }
 }
 
