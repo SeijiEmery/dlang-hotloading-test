@@ -134,10 +134,50 @@ class DModuleHotloader {
             //        );
             //    })
             //);
-            foreach (m; modulesToReload) {
-                writefln("Reloading d-module '%s':\n\t%s", m.name, m.files.join("\n\t"));
+
+            auto BUILD_DIR = "~/Library/Application Support/gsb_htest/cache/build/d/"
+                .expandTilde.absolutePath.to!string;
+            auto LIB_DIR   = "~/Library/Application Support/gsb_htest/cache/lib/d/"
+                .expandTilde.absolutePath.to!string;
+
+            auto CACHE_DIR = "~/Library/Application Support/gsb_htest/cache".expandTilde;
+            auto toCacheRelPath (string path) { 
+                return path.relativePath(CACHE_DIR);
             }
 
+            auto buildPath (string name) { return chainPath(BUILD_DIR, name).to!string; }
+            auto libPath   (string name) { return chainPath(LIB_DIR, name).to!string; }
+
+            foreach (m; modulesToReload) {
+                writefln("Reloading d-module '%s':\n\t%s\n", m.name, m.files.join("\n\t"));
+
+                auto cmd1 = format("dmd -c -fPIC %s",
+                    m.files.join(" ")
+                );
+                auto buildDir = chainPath(BUILD_DIR, m.name).to!string;
+
+                auto libname = format("lib%s.so", m.name);
+                auto cmd2 = format("dmd -of%s %s/*.o -shared -defaultlib=libphobos2.so",
+                    libname, buildDir.replace(" ", "\\ "));
+                auto libDir = chainPath(LIB_DIR, m.name).to!string;
+
+                import std.file;
+                import std.process;
+                bool runCmd (string cmd, string workingDir) {
+                    if (!workingDir.exists) {
+                        writefln("making dir %s", workingDir);
+                        workingDir.mkdirRecurse();
+                    }
+                    writefln("cd %s && %s", workingDir, cmd);
+                    auto result = executeShell(cmd, null, Config.none, size_t.max, workingDir);
+                    if (result.status != 0)
+                        return writeln(result.output), false;
+                    return true;
+                }
+                runCmd(cmd1, buildDir) && runCmd(cmd2, libDir) && (
+                    writefln("Produced %s (%s)\n", libname, chainPath(libDir, libname).to!string)
+                );
+            }
         }
     }
 }
