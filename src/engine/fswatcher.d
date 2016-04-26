@@ -15,6 +15,10 @@ struct FileChangeEvent {
 }
 alias FileChangeListener = void delegate(FileChangeEvent);
 
+private struct FileRecord {
+    DirEntry current, last;
+}
+
 
 // Basic utility that watches a list of directories + produces a list of file change
 // events via polling. Not thread safe (see FileWatcherRunner, FileWatcherEventCollector).
