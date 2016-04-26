@@ -102,10 +102,10 @@ class DModuleHotloader {
         foreach (path; paths) {
             auto i = path.indexOf("/");
             if (i >= 0) {
-                writefln("%s => %s", path, path[0 .. i]);
+                //writefln("%s => %s", path, path[0 .. i]);
                 tcmDirs.insert(path[0 .. i]);
             } else {
-                writefln("%s => %s", path, path);
+                //writefln("%s => %s", path, path);
                 tcmFiles.insert(path);
             }
         }
