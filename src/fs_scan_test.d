@@ -43,6 +43,7 @@ class DModuleHotloader {
     import std.array;
     import std.range;
     import std.conv;
+    import std.container.rbtree;
 
     string srcDir;
     string srcPat;
@@ -51,8 +52,15 @@ class DModuleHotloader {
         srcDir = chainPath(workingDir.absolutePath, "../src/modules/")
             .asNormalizedPath
             .to!string;
+        if (srcDir[$-1] != '/')
+            srcDir ~= '/';
         srcPat = srcDir ~ "/{*.d,*/*.d}";
     }
+
+
+    // temporaries
+    private auto tcmDirs = new RedBlackTree!string;
+    private auto tcmFiles = new RedBlackTree!string;
 
     void onFSEvent (FileChangeEvent ev) {
         import std.string;
@@ -74,11 +82,63 @@ class DModuleHotloader {
         auto removedFiles  = filterModulePaths(srcDir, ev.removed).array;
 
         if (modifiedFiles.length)
-            writefln("DMHL: Changed source files: %s", modifiedFiles);
+            writefln("D htl: Changed source files: %s", modifiedFiles);
         if (removedFiles.length)
-            writefln("DMHL: Removed source files: %s", removedFiles);
+            writefln("D htl: Removed source files: %s", removedFiles);
         else if (!modifiedFiles.length)
-            writefln("DMHL: No changes (%s, %s)", srcDir, srcPat);
+            writefln("D htl: No changes (%s, %s)", srcDir, srcPat);
+
+        tcmDirs.clear();
+        tcmFiles.clear();
+
+        auto paths = filterModulePaths(srcDir, chain(ev.added, ev.modified, ev.removed));
+        foreach (path; paths) {
+            auto i = path.indexOf("/");
+            if (i >= 0) {
+                writefln("%s => %s", path, path[0 .. i]);
+                tcmDirs.insert(path[0 .. i]);
+            } else {
+                writefln("%s => %s", path, path);
+                tcmFiles.insert(path);
+            }
+        }
+
+        auto changedModules = chain(tcmDirs.array, tcmFiles.array).array;
+        if (changedModules.length) {
+            writefln("D htl: Changed Modules: %s", changedModules);
+
+            struct ModuleDefn { string name; string[] files; }
+            ModuleDefn[] modulesToReload;
+            foreach (name; tcmDirs) {
+                import std.file;
+                auto path = chainPath(srcDir, name).to!string;
+                auto srcFiles = dirEntries(path, "*.d", SpanMode.depth)
+                    .map!"a.name";
+                modulesToReload ~= ModuleDefn(name, srcFiles.array);
+            }
+            foreach (file; tcmFiles) {
+                import std.regex;
+                string name = matchFirst(file, ctRegex!`(\w+)\.d`)[1];
+                string path = chainPath(srcDir, file).to!string;
+                modulesToReload ~= ModuleDefn( name, [ path ] );
+            }
+            //auto modulesToReload = chain(
+            //    tcmDirs.map!((string name) {
+            //        return ModuleDefn(name, []);
+            //    }),
+            //    tcmFiles.map!((string file) {
+            //        import std.regex;
+            //        return ModuleDefn(
+            //            matchFirst(file, regex(`(\w)+\.d`)).hit.to!string,
+            //            [ file ]
+            //        );
+            //    })
+            //);
+            foreach (m; modulesToReload) {
+                writefln("Reloading d-module '%s':\n\t%s", m.name, m.files.join("\n\t"));
+            }
+
+        }
     }
 }
 
