@@ -3,8 +3,10 @@
     "description": "Testcase for hotloading code at runtime using C/C++/D.",
     "authors": ["Seiji Emery"],
     "license": "MIT",
+    "targetType": "executable",
     "dependencies": {},
     "excludedSourceFiles": [
-        "src/modules/*"
+        "src/modules/*",
+        "src/old/*"
     ]
 }

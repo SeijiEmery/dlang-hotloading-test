@@ -3,7 +3,7 @@ import std.path;
 import std.format;
 
 string[] WATCHED_DIRS = [
-    "./src/modules", "./assets"
+    "src/modules", "assets"
 ];
 
 void main (string[] args) {
