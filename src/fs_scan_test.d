@@ -246,7 +246,8 @@ class DModuleRunner {
             writefln("---  Loading '%s' ---", name);
             if (lib.handle) {
                 try {
-                    link("initModule", &module_init);
+                    link("moduleInit", &module_init);
+                    link("moduleTeardown", &module_teardown);
 
                     writefln("--- Initializing '%s' ---", name);
 
