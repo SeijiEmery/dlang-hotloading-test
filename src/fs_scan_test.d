@@ -1,5 +1,6 @@
 import std.stdio;
 import std.path;
+import std.format;
 
 string[] WATCHED_DIRS = [
     "./src/modules", "./assets"
@@ -22,7 +23,9 @@ void main (string[] args) {
             writefln("%d files deleted:\n\t%s", ev.removed.length, ev.removed.join("\n\t"));
     });
 
-    auto dhl = new DModuleHotloader(args[0].baseName.stripExtension);
+    auto dmodules = new DModuleRunner();
+
+    auto dhl = new DModuleHotloader(args[0].baseName.stripExtension, dmodules);
     collector.addListener(&dhl.onFSEvent);
 
     auto fsthread = new FileWatcherRunner(watcher).start();
@@ -33,6 +36,7 @@ void main (string[] args) {
         //Thread.sleep(dur!("msecs")(1000));
         Thread.sleep(dur!("msecs")(16));
     }
+    dmodules.teardown();
 }
 
 
@@ -48,13 +52,16 @@ class DModuleHotloader {
     string srcDir;
     string srcPat;
 
-    this (string workingDir) {
+    DModuleRunner runner;
+
+    this (string workingDir, DModuleRunner runner) {
         srcDir = chainPath(workingDir.absolutePath, "../src/modules/")
             .asNormalizedPath
             .to!string;
         if (srcDir[$-1] != '/')
             srcDir ~= '/';
         srcPat = srcDir ~ "/{*.d,*/*.d}";
+        this.runner = runner;
     }
 
 
@@ -148,6 +155,10 @@ class DModuleHotloader {
             auto buildPath (string name) { return chainPath(BUILD_DIR, name).to!string; }
             auto libPath   (string name) { return chainPath(LIB_DIR, name).to!string; }
 
+            import std.typecons;
+            Tuple!(string,string)[] recompiledModules;   // name, absolute-path-to-lib
+            Tuple!(string,string)[] failedModules;       // name, error(s)
+
             foreach (m; modulesToReload) {
                 writefln("Reloading d-module '%s':\n\t%s\n", m.name, m.files.join("\n\t"));
 
@@ -163,6 +174,8 @@ class DModuleHotloader {
 
                 import std.file;
                 import std.process;
+
+                string lastErr;
                 bool runCmd (string cmd, string workingDir) {
                     if (!workingDir.exists) {
                         writefln("making dir %s", workingDir);
@@ -171,17 +184,121 @@ class DModuleHotloader {
                     writefln("cd %s && %s", workingDir, cmd);
                     auto result = executeShell(cmd, null, Config.none, size_t.max, workingDir);
                     if (result.status != 0)
-                        return writeln(result.output), false;
+                        return writeln(lastErr = result.output), false;
                     return true;
                 }
-                runCmd(cmd1, buildDir) && runCmd(cmd2, libDir) && (
-                    writefln("Produced %s (%s)\n", libname, chainPath(libDir, libname).to!string)
-                );
+                auto success = 
+                    runCmd(cmd1, buildDir) &&
+                    runCmd(cmd2, libDir);
+
+                if (success) {
+                    writefln("Produced %s (%s)\n", libname, chainPath(libDir, libname).to!string);
+                    recompiledModules ~= tuple(m.name, chainPath(libDir, libname).to!string);
+                } else {
+                    failedModules ~= tuple(m.name, lastErr);
+                }
             }
+            writefln("Recompiled %d modules: %s", recompiledModules.length, recompiledModules.map!("a[0]"));
+            writefln("%d failed: %s", failedModules.length, failedModules.map!("a[0]"));
+            foreach (err; failedModules)
+                writefln("\t%s", err[1]);
+
+
+            foreach (m; recompiledModules)
+                runner.load(m[0], m[1]);
         }
     }
 }
 
 
+class DModuleRunner {
+    import util.sharedlib;
+    import core.sys.posix.dlfcn;
 
+    private static class HotModule {
+        string name, path;
+        SharedLib lib = null;
+
+        private void function() module_init = null;
+        private void function() module_teardown = null;
+        private void function(double) module_update = null;
+        private bool loaded = false;
+
+        this (string name, string path) {
+            this.name = name; this.path = path;
+        }
+        ~this () { if (lib) unload(); }
+
+        void load () {
+            if (lib) unload();
+
+            loaded = false;
+            lib = new SharedLib(path);
+
+            T link (T)(string symbolName, T* fcn) {
+                auto f = lib.getSymbol!T(symbolName);
+                if (!f) throw new Exception(
+                    format("Failed to link '%s':\n\t%s", 
+                    symbolName, dlerror()));
+                return *fcn = f;
+            }
+
+            writefln("---  Loading '%s' ---", name);
+            if (lib.handle) {
+                try {
+                    link("initModule", &module_init);
+
+                    writefln("--- Initializing '%s' ---", name);
+
+                    module_init();
+
+                    writefln("--- Module '%s' OK ---", name);
+                    loaded = true;
+                } catch (Exception e) {
+                    writefln("Error while loading module: %s", e);
+                }
+            }
+        }
+        void unload () {
+            assert(lib);
+            if (lib && loaded) {
+                try {
+                    writefln("--- Unloading '%s' ---", name);
+                    if (module_teardown)
+                        module_teardown();
+                    writefln("--- Module unload OK ---", name);
+                } catch (Exception e) {
+                    writefln("Error while unloading module: %s", e);
+                }
+            }
+            lib.unload();
+            lib = null;
+            loaded = false;
+        }
+    }
+
+
+    HotModule[string] modules;
+
+    ~this () {
+        teardown();
+    }
+
+    void load (string name, string path) {
+        if (name in modules) {
+            modules[name].path = path;
+            modules[name].load();
+        } else {
+            modules[name] = new HotModule(name, path);
+            modules[name].load();
+        }
+    }
+
+    void teardown () {
+        foreach (k, v; modules) {
+            v.unload();
+            modules.remove(k);
+        }
+    }
+}
 

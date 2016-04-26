@@ -9,7 +9,6 @@ shared static ~this () {
     writefln("Unloading...");
 }
 
-
 extern (C) {
 
 public void moduleInit () { // But this does
@@ -18,5 +17,4 @@ public void moduleInit () { // But this does
 public void moduleTeardown () {
     writefln("...");
 }
-
 }
